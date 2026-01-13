@@ -1,0 +1,68 @@
+# deadlock logic:
+
+jbd2_journal_commit_transaction()
+    ↓
+write_lock(&journal->j_state_lock);     // LOCK ACQUIRED
+    ↓
+while (commit_transaction->t_buffers) {
+    // Prepare buffers for NVMe
+}
+    ↓
+submit_bh(REQ_OP_WRITE, ...);          // NVMe I/O INITIATED
+    ↓
+// *** NVMe DEVICE HANGS HERE ***
+    ↓
+// write_lock(&journal->j_state_lock) NEVER RELEASED
+    ↓
+DEADLOCK: All other threads block trying to acquire j_state_lock
+
+
+# error log : blk_update_request: I/O error, ... comes from below code,
+
+if (error && req->cmd_type == REQ_TYPE_FS &&
+    !(req->cmd_flags & REQ_QUIET)) {
+    char *error_type;
+    
+    switch (error) {
+    case -ENOLINK:
+        error_type = "recoverable transport";
+        break;
+    case -EREMOTEIO:
+        error_type = "critical target";
+        break;
+    case -EBADE:
+        error_type = "critical nexus";
+        break;
+    case -ETIMEDOUT:
+        error_type = "timeout";
+        break;
+    case -ENOSPC:
+        error_type = "critical space allocation";
+        break;
+    case -ENODATA:
+        error_type = "critical medium";
+        break;
+    case -EIO:
+    default:
+        error_type = "I/O";
+        break;
+    }
+    printk_ratelimited(KERN_ERR "%s: %s error, dev %s, sector %llu\n",
+               __func__, error_type, req->rq_disk ?
+               req->rq_disk->disk_name : "?",
+               (unsigned long long)blk_rq_pos(req));
+}
+
+# detail call stack
+submit_bh → submit_bh_wbc → submit_bio → generic_make_request → 
+blk_mq_make_request → blk_mq_queue_rq → nvme_queue_rq (NVMe PCIe driver)
+
+nvme_queue_rq (submits I/O)
+  → nvme_complete_rq (on completion with error)
+    → blk_mq_end_request
+      → __blk_mq_end_request
+        → blk_update_request (for stacked devices)
+          → Prints "blk_update_request: I/O error" message
+
+
+
