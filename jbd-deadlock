@@ -1,5 +1,23 @@
 # deadlock logic:
 
+Thread A (Writer) → needs j_state_lock → waits for commit thread
+Thread B (Commit Thread) → needs I/O completion → waits for NVMe device
+Thread C (kswapd) → needs transaction completion → waits for commit thread
+
+NVMe Device → PCIe Completion → MSI/MSI-X Interrupt → 
+APIC → CPU Interrupt → nvme_irq() → 
+nvme_process_cq() → complete() → wake_up()
+
+__Failure points:__
+
+1. __NVMe → PCIe__: Completion TLP lost
+2. __PCIe → CPU__: MSI message lost
+3. __CPU → Kernel__: IRQ not delivered to correct vector
+4. __Kernel → Driver__: `nvme_irq()` not invoked
+5. __Driver → Block layer__: Completion not signaled
+
+
+
 jbd2_journal_commit_transaction()
     ↓
 write_lock(&journal->j_state_lock);     // LOCK ACQUIRED

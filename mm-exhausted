@@ -1,0 +1,37 @@
+Processes allocating memory
+        ↓
+Page faults
+        ↓  
+kswapd tries to reclaim
+        ↓
+Needs to evict inode (ext4_evict_inode)
+        ↓
+Needs journal transaction completion (jbd2_complete_transaction)
+        ↓
+Journal commit stuck on slow NVME I/O
+        ↓
+DEADLOCK (for practical purposes)
+
+
+- __Initial condition:__ NVMe is slow (high latency, low bandwidth)
+
+- __JBD2 commit thread__ submits journal I/O, gets stuck in `wait_on_buffer()`
+
+- __Memory pressure increases__ (due to normal workload)
+
+- __kswapd wakes up__ to reclaim memory
+
+- __kswapd needs to evict inodes__ → calls `ext4_evict_inode()`
+
+- __ext4 needs to wait for journal__ → calls `jbd2_complete_transaction()`
+
+- __kswapd blocks__ waiting for journal commit that's stuck on slow NVMe
+
+- __Memory cannot be reclaimed__ because kswapd is blocked
+
+- __More processes need memory__ → more page faults → more kswapd work
+
+- __System runs out of memory__ → OOM killer may trigger
+
+- __OOM killer may also need filesystem operations__ → also blocks on journal
+
